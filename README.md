@@ -11,7 +11,7 @@
   
   b. cmd, using barcode-barcode amplicon sequencing as an example.
   
-    I.Extract barcode + UMI for bartender input,
+    I.Extract barcodes + UMI for bartender input,
       python3.9 get_barcodes_UMI.py CGGCTATG_GCCTCTAT.txt
   
     II. Correct potential technical errors,
