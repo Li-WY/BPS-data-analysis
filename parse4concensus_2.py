@@ -34,4 +34,4 @@ for each_line in file_raw_barcodes:
 	if L[0] in Recipient_all and L[1] in Donor_all:
 		tmp_1=Recipient_all[L[0]].split('&&&')
 		tmp_2=Donor_all[L[1]].split('&&&')
-		outfile1.write(tmp_1[0]+','+tmp_2[0]+'\n')  # need to figure out why different columns of sys.argv[5]
+		outfile1.write(tmp_1[0]+','+tmp_2[0]+'\n') 
