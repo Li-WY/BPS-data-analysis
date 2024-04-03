@@ -1,14 +1,6 @@
-# BPS-data-analysis
+# BPS-data-analysis-Illumina reads
 
-1. About dataset 
-
-  a. Demultiplexed reads in BPS_Data_1st folder are the 1st sequencing data (barcode-barcode amplicon.) generated to identify recipient barcodes by known donor barcodes.
-  
-  b. Demultiplexed reads in BPS_Data_MiSeq folder are most recent MiSeq data, including barcode-barcode and barcode-oligo amplicons.
-
-  c. Index info can be found at https://benchling.com/s/etr-Prb6ALMQMEZPfTkh5TEd
- 
-2. About scripts and cmd
+About scripts and cmd
 
   a. PartitionReads.ipynb is developed by Xianan for demultiplexing.
   
