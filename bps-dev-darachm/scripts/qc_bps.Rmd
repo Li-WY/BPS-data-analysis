@@ -1,0 +1,173 @@
+---
+title: 'BPS QC report'
+date: '`r Sys.Date()`'
+---
+
+```{r}
+library(tidyverse)
+library(stringdist)
+
+#rmarkdown::render(input='qc_bps.Rmd',output_dir=getwd(),knit_root_dir=getwd())
+```
+
+# Functions
+
+```{r,funcs,cache=T}
+
+read_fastq <- function(path) {
+    # also reads fqz
+    readLines(
+        pipe(
+            paste0( 
+                "zcat -f ",path," | paste - - - - "
+                )
+            )
+        ) %>% 
+    map(.,function(x){
+            setNames(strsplit(x,split="\t")[[1]],
+                c('id','seq','spacer','quality'))
+        }) %>% 
+    tibble(raw=.) %>% 
+    unnest_wider(raw,names_repair="minimal") %>%
+    select(-spacer) %>%
+    return()
+}
+
+read_fasta <- function(path) {
+    # also reads fqz
+    readLines(
+        pipe(
+            paste0( 
+                "zcat -f ",path," | paste - -"
+                )
+            )
+        ) %>% 
+    map(.,function(x){
+            setNames(strsplit(x,split="\t")[[1]],
+                c('id','seq'))
+        }) %>% 
+    map(.,function(x){x[!is.na(names(x))]}) %>%
+    tibble(raw=.) %>% 
+    unnest_wider(raw,names_repair="minimal") %>%
+    mutate(id=sub("^>","",id)) %>%
+    return()
+}
+
+read_sam <- function(path) {
+    # also reads fqz
+    readLines(
+        pipe(
+            paste0( 
+                "zcat -f ",path," | grep -v '^@'"
+                )
+            )
+        ) %>% 
+    map(.,function(x){
+            setNames(strsplit(x,split="\t")[[1]],
+                c('id','flag','ref',NA,NA,'cigar',NA,NA,NA,'seq'))
+        }) %>% 
+    map(.,function(x){x[!is.na(names(x))]}) %>%
+    tibble(raw=.) %>% 
+    unnest_wider(raw,names_repair="minimal") %>%
+    return()
+}
+
+```
+
+# Read in the datar
+
+```{r,whatarewe}
+this_id <- readLines("id")
+```
+
+## Filtering
+
+```{r,filtered,cache=T}
+filter_report <- read_csv("filter_report.csv")
+filter_report
+
+g <- filter_report %>%
+    filter(records>sum(records)/1e4) %>%
+    ggplot()+theme_bw()+
+    aes(x=sample,y=records,fill=filtrate)+
+    facet_wrap(~run)+
+    geom_bar(position="stack",stat="identity")+
+    theme(axis.text.x=element_text(angle=90))+
+    ggtitle(paste0("Filtering out unwanted ",this_id),
+        subtitle="filtered out entries for < 1e-4 of total records")+
+    NULL
+g
+
+ggsave(paste0(Sys.Date(),"_filter_report.jpeg"),g,width=7,height=5)
+```
+
+## Plasmid separation
+
+```{r,plasmid_sep,cache=T}
+plasmid_sep_report <- read_csv("plasmid_separation_report.csv")
+plasmid_sep_report
+
+g <- plasmid_sep_report %>%
+    filter(counts>sum(counts)/1e4) %>%
+    ggplot()+theme_bw()+
+    aes(x=sample,y=counts,fill=plasmid)+
+    facet_wrap(~pool)+
+    geom_bar(position="stack",stat="identity")+
+    theme(axis.text.x=element_text(angle=90))+
+    ggtitle(paste0("Separating plasmids by signature seq ",this_id),
+        subtitle="filtered out entries for < 1e-4 of total records")+
+    NULL
+g
+
+ggsave(paste0(Sys.Date(),"_plasmid_separation_report.jpeg"),g,width=7,height=5)
+```
+
+
+
+## SAMlami
+
+## Barcodes
+
+## Polishing
+
+## Payloads
+
+
+# Extra crud
+
+```{r,barcodes_analysis,eval=F,echo=F}
+
+analysis_codes <- codes %>% group_by(raw,clustered) %>% tally() %>%
+    mutate(distance=unlist(pmap(list(raw,clustered),stringdist,method='lv'))) 
+analysis_codes
+
+g <- analysis_codes %>%
+    ungroup() %>% 
+    select(-raw,-clustered) %>%
+    pivot_longer(c(n,distance)) %>%
+    ggplot()+theme_classic()+
+    aes(x=value)+
+    facet_wrap(~name,scales="free")+
+    #geom_histogram(breaks=seq(-.5,30.5))+
+    geom_bar()+
+    NULL
+g
+
+ggsave(paste0(Sys.Date(),"_",this_id,"_barcode_stats.jpeg"),g,width=7,height=5)
+
+#ggsave(paste0(Sys.Date(),"_",this_id,"_barcode_stats.jpeg"),g,width=7,height=5)
+
+# graph stuff
+
+#for (i in list.files("./",pattern=".*bam")) {
+#    print(i)
+#}
+
+#library(ggbio)
+#fl.bam <- system.file("extdata", "input_psl1064_bps_empty_indexedAtSnaBI.fasta_test_aligned.bam", package = "biovizBase")
+#wh <- keepSeqlevels(wh, "chr17")
+#autoplot(fl.bam, which = resize(wh, width = width(wh)/10), geom = "gapped.pair")
+
+```
+
+

@@ -1,0 +1,187 @@
+# BPS config file version 0.10-rc 
+
+pools:
+
+  455_lasso_pool_I:
+    plasmids:
+      - 1064-937-lasso
+    demux: |
+      barcode73	455_lasso_s1
+      barcode74	455_lasso_s2
+      barcode75	455_lasso_s3
+
+  455_lasso_bc_pool_I:
+    plasmids:
+      - 438-937
+      - 439-937
+      - 1064-937-lasso
+    demux: |
+      barcode76	bc_bc_1
+      barcode77	bc_bc_2
+      barcode73	455_lasso_s1
+      barcode74	455_lasso_s2
+      barcode75	455_lasso_s3
+      barcode78	455_lasso_s4
+      barcode79	455_lasso_s5
+      barcode80	455_lasso_s6
+      barcode81	455_lasso_s7
+      barcode82	455_lasso_s8
+      barcode83	455_lasso_s9
+      barcode84	455_lasso_s10
+      barcode85	455_lasso_s11
+      barcode86	455_lasso_s12
+      barcode87	455_lasso_s13
+      barcode88	455_lasso_s14
+
+  455_lasso_pool_II:
+    plasmids:
+    - 1064-937-lasso
+    demux: |
+      barcode1	455_lasso_s1
+      barcode2	455_lasso_s2
+      barcode3	455_lasso_s3
+      barcode4	455_lasso_s4
+      barcode5	455_lasso_s5
+      barcode6	455_lasso_s6
+      barcode7	455_lasso_s7
+      barcode8	455_lasso_s8
+      barcode9	455_lasso_s9
+      barcode10	455_lasso_s10
+      barcode11	455_lasso_s11
+      barcode12	455_lasso_s12
+      barcode13	455_lasso_s13
+      barcode14	455_lasso_s14
+
+  455_lasso_pool_III:
+    plasmids:
+    - 1064-937-lasso
+    demux: |
+      barcode17	455_lasso_s15
+      barcode18	455_lasso_s16
+      barcode19	455_lasso_s17
+      barcode20	455_lasso_s18
+      barcode21	455_lasso_s19
+      barcode22	455_lasso_s20
+      barcode23	455_lasso_s21
+      barcode24	455_lasso_s22
+      barcode25	455_lasso_s23
+      barcode26	455_lasso_s24
+      barcode27	455_lasso_s25
+      barcode28	455_lasso_s26
+      barcode29	455_lasso_s27
+      barcode30	455_lasso_s28
+      barcode31	455_lasso_s29
+      barcode32	455_lasso_s30
+
+plasmids:
+
+  438-937:
+    signature: 'TAGTACGCGTccaCACGGAGGTGAGCCCGCCTGCCCGGGGCTAGCGTCG'
+
+  439-937:
+# go diff??
+    signature: 'TAGTACGCGTCCCGGGGCTAGCGTCGACTCTAGAGGATCGATCCTTTTT'
+
+  1064-937-lasso:
+    signature: 'CATCGAGGGCTAGAATTACCTACCGGCCTCCACCATGCCTGCGggcgcgccaccgctaagctcaaggtcacaaaagcAgACGACGGCCAGTgtcgacATG'
+
+runs:
+
+  20221111_1544_MN21180_FAT59932_c3bac6f0:
+    fastq: '/archive/l/seq_data/bps/20221111_1544_MN21180_FAT59932_c3bac6f0/basecalling/output/demuxed.fastq.gz'
+    flowcell: 'FLO-MIN112'
+    pool: '455_lasso_bc_pool_I'
+    medaka-model: 'r104_e81_sup_g610'
+    header-parse: 'modified'
+
+  20221113_1507_MN24328_FAT59932_3e555f90:
+    fastq: '/archive/l/seq_data/bps/20221113_1507_MN24328_FAT59932_3e555f90/basecalling/output/demuxed.fastq.gz'
+    flowcell: 'FLO-MIN112'
+    pool: '455_lasso_bc_pool_I'
+    medaka-model: 'r104_e81_sup_g610'
+    header-parse: 'modified'
+
+  20221012_1434_MN21180_FAT60123_2f1f2cff:
+    fastq: '/archive/l/seq_data/bps/20221012_1434_MN21180_FAT60123_2f1f2cff/basecalling/output/demuxed.fastq.gz'
+    flowcell: 'FLO-MIN112'
+    pool: '455_lasso_pool_I'
+    medaka-model: 'r104_e81_sup_g610'
+    header-parse: 'modified'
+
+  20230124_1146_MN24357_FAV20471_aa3aca5f:
+    fastq: '/archive/l/seq_data/bps/20230124_1146_MN24357_FAV20471_aa3aca5f/basecalling/output/demuxed.fastq.gz'
+    flowcell: 'FLO-MIN114'
+    pool: '455_lasso_pool_II'
+    medaka-model: 'r1041_e82_400bps_sup_v4.2.0'
+    header-parse: 'modified'
+
+  20230329_1348_MN24357_FAV33302_7c8b2367:
+    fastq: '/archive/l/seq_data/bps/20230329_1348_MN24357_FAV33302_7c8b2367/basecalling/output/demuxed.fastq.gz'
+    flowcell: 'FLO-MIN114'
+    pool: '455_lasso_pool_III'
+    medaka-model: 'r1041_e82_400bps_sup_v4.2.0'
+    header-parse: 'modified'
+
+  20230330_1541_MN24357_FAV33302_a9025c19:
+    fastq: '/archive/l/seq_data/bps/20230330_1541_MN24357_FAV33302_a9025c19/basecalling/output/demuxed.fastq.gz'
+    flowcell: 'FLO-MIN114'
+    pool: '455_lasso_pool_III'
+    medaka-model: 'r1041_e82_400bps_sup_v4.2.0'
+    header-parse: 'modified'
+
+
+#####
+#####
+##### TODO conceptually rewrite so there's a top level ontology category of
+##### 'assembly', so all the pre-assembly and assembly steps can be pooled
+##### across 'experiments', which maybe should just be 'analyses' then
+#####
+#####
+
+samlami-rec-bc: &samlami-rec-bc
+  - arg: '--cut-on-left'
+    ref: 'ctcaagcaaggttttcagtataatgttacatgcgtacacgcgtctgtacagaaaaaaaagaaaaatttgaaatataaataacgttcttaatactaacata'
+    tail: 100
+  - arg: '--cut-on-right'
+    ref: 'ttgccctctctcttcattcagggtcatgagaggcacgccattcaaggggagaagtgagatcggtaccGGGGCCACTAGGGACAGGATtgg'
+    head: 100
+
+samlami-internal: &samlami-internal
+  - arg: '--cut-on-left'
+    ref: 'cgagGGTACCttgccctctctcttcattcagggtcatgagaggcacgccattcaaggggagaagtgagatcggtaccGGGGCCACTAGGGACAGGATtgg'
+    tail: 100
+  - arg: '--cut-on-right'
+    ref: 'cacatatacctgccgttcactattatttagtgaaatgagatattatgatattttctgaattgtgattaaaaaggcaactttatgcccatgcaacagaaac'
+    head: 100
+
+
+experiments: 
+
+  455-lasso:
+    filter-out: 'nuconfig/filter-out-r6k-psc101-937.fasta'
+    pools:
+      - '455_lasso_bc_pool_I'
+      - '455_lasso_pool_I'
+      - '455_lasso_pool_II'
+      - '455_lasso_pool_III'
+    plasmids:
+      - 1064-937-lasso
+    extract-barcode:
+      1064-937-lasso:
+        samlami: *samlami-rec-bc
+        itermae: 'nuconfig/itermae_BC_937.yaml'
+        knowncodes: 'nuconfig/recipient-barcodes.fasta' 
+          # implement how to query known barcodes by sample
+    pre-assembly:
+      samlami: *samlami-internal
+    assembly-method: msa
+    post-assembly:
+      cutoutdonor:
+        itermae: 'nuconfig/itermae_payload_1064_lasso.yaml'
+        target-fasta: 'nuconfig/lorenzo_orfs_fixed_230830.fasta'
+        target-size: 'long'
+
+
+
+
+

@@ -1,0 +1,8 @@
+# TODO
+
+- Change to more gracefully handle lots of plasmids multiplexed together,
+    ie take a list of reference fastas for trimming, and how decide which
+    plasmid it is? Also, can we it skip a trim?
+- Genbank for config of itermaes and such
+- Optional target seq, optional known barcodes
+- Trim is doing it four times
