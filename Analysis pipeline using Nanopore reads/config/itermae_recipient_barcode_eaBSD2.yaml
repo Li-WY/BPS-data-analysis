@@ -1,0 +1,51 @@
+# Example config YAML file for itermae.
+ 
+# Syntax details:
+#   - # are comments
+#   - ':'s denote a key-value relationship, like
+#     'key: value'
+#   - '-'s preface array/list elements, so this is a list and order matters
+#   - order of keys does not matter
+#   - things inside a key-value (a ':') or inside a list (a '-') need to be 
+#     indented at least two spaces, and be consistent
+#   - strings can be in quotes or not, but I use them below for explicit
+#     consistency (except for true / false values, which are specified without
+#     quotes)
+
+#verbosity: 1
+
+# Inputs section 
+input_from: 'STDIN' # This is the default, but could also be a file path
+input_format: 'fastq' # This is the default, but can be FASTQ, fasta, txt, 
+    # SAM (case don't matter) or something that you know BioPython SeqIO handles
+input_gzipped: false # Default
+
+matches: # This key's value is a list of matches to run, in order
+
+  - use: 'input' # What group to match against? Default is 'input'
+    pattern: 'AAATTGTCACAACGCCNGCGGCCAATTCGATCT'
+    marking: 'aaaaaaaaaaaaaaaaBcccccccccccccccc' 
+    marked_groups: 
+      a:           
+          name: 'up' # Optional name to save it as
+          allowed_errors: 2
+      B:
+          name: 'barcode'
+          repeat_min: 16
+          repeat_max: 24
+      c:
+          name: 'down'
+          allowed_errors: 2
+
+# Defining what to output
+output_list: # List of different sequence records to generate in the SAME FILE
+
+  - seq: 'barcode' 
+    filter: 'True' # Filter to apply before outputing
+
+# To where
+output_to: 'STDOUT'
+output_format: 'sam' 
+
+# Other outputs
+output_failed: failed.fastq # optional, path to write failed reads to

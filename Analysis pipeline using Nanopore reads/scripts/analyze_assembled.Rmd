@@ -1,0 +1,1098 @@
+
+```{r}
+#rmarkdown::render("analyze_assembled.Rmd",output_dir=getwd(),knit_root_dir=getwd())
+
+library(tidyverse)
+library(magrittr)
+library(stringdist)
+library(viridis)
+library(parallel)
+library(ggrepel)
+```
+
+
+##### Funcs
+
+```{r}
+delimiter <- function(x='raw') {
+    if (x=='raw') return('---')
+    else if (x=='se') return('\\-\\-\\-')
+    else if (x=='de') return('\\\\-\\\\-\\\\-')
+}
+
+parse_flags <- function(flag) {
+    return(
+        c(
+            'multi_seg',
+            'proper_align',
+            'unmapped',
+            'next_unmapped',
+            'revcomp',
+            'next_revcomp',
+            'first_segment',
+            'last_segment',
+            'secondary_aln',
+            'not_passing_filter',
+            'duplicate',
+            'supp_aln'
+            )[which(intToBits(flag)>0)]
+        )
+}
+parse_flags(20)
+parse_flags('0')
+parse_flags('260')
+
+parse_cs <- function(cs) {
+    deletions <- 0
+    insertions <- 0
+    mismatches <- 0
+    matches <- 0
+    cs_split <- str_split(cs,"[^:\\-*+-]+")[[1]]
+    cs_split_values <- str_split(cs,"[:\\-*+-]")[[1]]
+    if (any(is.na(cs_split))) {
+        return(list(cs_deletions=deletions,
+                cs_insertions=insertions,cs_mismatches=mismatches))
+    }
+    for (i in 1:(length(cs_split)-1)) {
+        operation <- cs_split[i]
+        number <- cs_split_values[i+1]
+        if (operation == ":")
+            matches <- matches + as.numeric(number)
+        else if (operation == "-")
+            deletions <- deletions + str_count(number,"[atcgnATCGN]")
+        else if (operation == "+") 
+            insertions <- insertions + str_count(number,"[atcgnATCGN]")
+        else if (operation == "*") 
+            mismatches <- mismatches + str_count(number,"[atcgnATCGN]")
+        else if (operation == "~")
+            stop(paste("There's a cs tag for introns... ",operation))
+        else 
+            stop(paste("don't recognize cs operation of",i))
+    }
+    return(list(cs_matches=matches, cs_deletions=deletions,
+            cs_insertions=insertions,cs_mismatches=mismatches)
+        )
+}
+#parse_cs(":244")
+#parse_cs(":214")
+#parse_cs(":106*ct:137")
+#parse_cs(":106-aacata:13+a:7")
+
+cigar_string_parser <- function(x){
+    if (x=="*") return(data.frame(operations=NA,lengths=NA,position_in_query=NA,position_in_aln=NA))
+    operations <- strsplit(x,split="\\d+")[[1]]
+    opz <- data.frame(
+        operations=operations[2:length(operations)],
+        lengths=strsplit(x,split="[MIDSH=X]")[[1]]
+        )
+    opz$position_in_query <- cumsum(opz$lengths)
+    opz[opz$operations!="S",'position_in_aln'] <- 
+        cumsum(opz[opz$operations!="S",]$lengths)
+    return(opz)
+}
+#cigar_string_parser("25S10M1D10M1I10M25S")
+
+parse_cigar_stats <- function(cigar_stats) {
+    tibble(
+            cig_length=max(cigar_stats$position_in_aln,na.rm=T) ,
+            cig_errors=sum(as.numeric(
+                    cigar_stats[cigar_stats$operations%in%c("I","D","X"),
+                        ]$lengths), na.rm=T) ,
+            cig_clip=sum(as.numeric(
+                    cigar_stats[cigar_stats$operations%in%c("H","S"),
+                        ]$lengths), na.rm=T) ,
+            cig_insertions=sum(as.numeric(
+                    cigar_stats[cigar_stats$operations%in%c("I"),
+                        ]$lengths), na.rm=T) ,
+            cig_deletions=sum(as.numeric(
+                    cigar_stats[cigar_stats$operations%in%c("D"),
+                        ]$lengths), na.rm=T) ,
+            cig_mismatch=sum(as.numeric(
+                    cigar_stats[cigar_stats$operations%in%c("X"),
+                        ]$lengths), na.rm=T)) %>%
+        mutate(cig_length=ifelse(is.infinite(cig_length),0,cig_length))
+}
+#big_cigar <- "2567S29M1I14M1I12M1I4M1D23M1I47M1I68M3D5M1I67M1I48M1I145M2D9M2D3M5D2M1D4M1I5M1D45M1D7M2I33M1D36M5D16M1I1M4D67M2D105M1I4M1D9M1D8M1D74M2I49M1I3M1I83M3I16M1D14M1D74M1D30M2D6M1I12M1D21M2D5M4D1M1D90M2I67M1I4M1I12M1D24M1I9M1I40M1D71M3D33M4D95M2I4M4I8M1I134M1D34M2D55M1I116M"
+#cigar_string_parser(big_cigar)
+#parse_cigar_stats(cigar_string_parser(big_cigar))
+#parse_cigar_stats(cigar_string_parser('*'))
+
+parse_md <- function(md) {
+    deletions <- 0
+    mismatches <- 0
+    md_split <- str_split(md,"[0-9]")[[1]]
+#print(md_split)
+    if (is.na(md_split[1])) {
+        return(list(md_deletions=deletions,md_mismatches=mismatches))
+    }
+    for (i in md_split) {
+        if (i == "") next
+        else if (grepl("^\\^",i)) deletions <- deletions + 1
+        else mismatches <- mismatches + 1
+    }
+    list(md_deletions=deletions,md_mismatches=mismatches)
+}
+#parse_md("19^C16G80^T10G103^T11")
+#parse_md("96C197")
+
+```
+
+
+```{r}
+##### Funcs
+
+
+
+# read it
+
+# rc <- function(x){paste0(rev(strsplit(toupper(gsub('A','t',gsub('T','a',gsub('C','g',gsub('G','c',x))))),"")[[1]]),collapse="") };rc('ATCG')
+
+```
+
+# datarz
+
+```{r}
+
+this_id <- readLines("id")
+
+parse_cleaned_assembly_sam <- function(filename) {
+    writeLines(
+        readLines(pipe(paste0("cat '",filename,"' | grep -v '^@'"))) ,
+        paste0(filename,".clean"))
+    read_tsv(
+            paste0(filename,".clean"), 
+#"this-example-experiment---1064x937---r104_e81_sup_variant_g610_payloads.sam.clean",
+#"this-example-experiment---1064x937---r104_e81_sup_variant_g610_to_ref.sam.clean"
+            col_names=paste0("X",seq(1,100))
+            ) %>%
+        unite('tags',c(matches('X[1][2-9]'),matches('X2[0-9]'))) %>%
+#        mutate(cs=unlist(map(tags,function(x){str_match(x,"cs:Z:([atgcATGC0-9=:*+\\-~]*)[^atcgATCG0-9=:*+\\-~]")[2]}))) %>%
+        separate(X1,into=c("sample",'platewell','codecontig'),
+            sep=delimiter(),extra="merge")  %>% 
+        separate(platewell,into=c("plate",'well'),
+            sep="-",extra="merge") %>%
+        separate(codecontig,into=c("code",'contig'),
+            sep="_",extra="merge") %>%
+        mutate(flag=map(X2,parse_flags)) %>% 
+        select(-X2) %>%
+        rename(ref=X3,seq=X10,qual=X11) %>% 
+        mutate(cigar_stats=map(map(X6,cigar_string_parser),parse_cigar_stats)) %>%
+        rename(cigar=X6) %>%
+        mutate(nm=unlist(map(tags,function(x){
+                    as.numeric(str_match(x,"NM:i:([^_]+)_")[2])}))) %>%
+        mutate(md=map(tags,function(x){
+                    parse_md(str_match(x,"MD:Z:([^_]+)_")[2])})) %>%
+        mutate(plate=ifelse(plate=="unknown",NA,plate)) %>%
+        separate(well,into=c('row','col'),sep=1) %>%
+	    mutate(
+	        row=factor(row,levels=toupper(letters[1:16])) ,
+	        col=factor(as.numeric(col),levels=1:24)
+	        ) %>%
+        select(-X4,-X5,-X7,-X8,-X9,-tags) %>%
+        unnest_wider(cigar_stats) %>%
+        unnest_wider(md) %>%
+        return()
+}
+#tmp <- tibble(filenames=list.files(path="./","*_to_ref.sam$")) %>%
+#    head(1) %>%
+#    mutate(
+#        plasmid=sub("_payloads.sam","",filenames),
+#        sam=map(filenames,parse_cleaned_sam)
+#        )
+#tmp$sam[[1]] %>%
+#    filter(unlist(map(flag,
+#                function(x){
+#T
+#                    #!length(intersect(x,c('supp_aln','secondary_aln')))
+#                }))) %>% head() %>% data.frame
+##payloads_datar %T>% {print(dim(.))} %>% sample_n(10)
+
+assembled_datar <- tibble( 
+        filenames=list.files(path="./","paSL4.sam$"),
+        ) %>%
+    mutate(
+        plasmid=sub(".sam","",filenames),
+        sam=map(filenames,parse_cleaned_assembly_sam)
+        ) %>%
+    #separate(plasmid,into=c('experiment','plasmid','medaka'),sep=delimiter()) %>%
+    unnest(sam) %>%
+    select(-qual) #%>%
+#    filter(unlist(map(flag,
+#                function(x){
+#                    !length(intersect(x,c('supp_aln','secondary_aln')))
+#                })))
+assembled_datar %T>% {print(dim(.))} %>% head(10) %>% data.frame
+#assembled_datar %T>% {print(dim(.))} %>% sample_n(10) %>% data.frame
+
+try({
+polass2ref_datar <- tibble( 
+        filenames=list.files(path="./","*_to_ref.sam$"),
+        ) %>%
+    mutate(
+        plasmid=sub("_to_ref.sam","",filenames),
+        sam=map(filenames,parse_cleaned_assembly_sam)
+        ) %>%
+    #separate(plasmid,into=c('experiment','plasmid','medaka'),sep=delimiter()) %>%
+    unnest(sam) %>%
+#    filter(unlist(map(flag,
+#                function(x){
+#                    !length(intersect(x,c('supp_aln','secondary_aln')))
+#                }))) 
+    select(-qual) 
+polass2ref_datar %T>% {print(dim(.))} %>% sample_n(10) %>% data.frame
+})
+
+
+
+parse_cleaned_paf <- function(filename) {
+    writeLines(
+        readLines(pipe(paste0("cat '",filename,"' | grep -v '^@'"))) ,
+        paste0(filename,".clean"))
+    read_tsv(
+            paste0(filename,".clean"), 
+#"this-example-experiment---1064x937---r104_e81_sup_variant_g610_payloads.sam.clean",
+#"this-example-experiment---1064x937---r104_e81_sup_variant_g610_to_ref.sam.clean"
+            col_names=paste0("X",seq(1,100))
+            ) %>%
+        unite('tags',c(matches('X[1][3-9]'),matches('X2[0-9]'))) %>%
+#        mutate(cs=unlist(map(tags,function(x){str_match(x,"cs:Z:([atgcATGC0-9=:*+\\-~]*)[^atcgATCG0-9=:*+\\-~]")[2]}))) %>%
+        separate(X1,into=c("sample",'platewell','codecontig'),
+            sep=delimiter(),extra="merge")  %>% 
+        separate(platewell,into=c("plate",'well'),
+            sep="-",extra="merge") %>%
+        separate(codecontig,into=c("code",'contig'),
+            sep="_",extra="merge") %>%
+        mutate(type=unlist(map(tags,function(x){str_match(x,"tp:A:([PSIi]*)")[2]}))) %>%
+        mutate(nm=unlist(map(tags,function(x){
+                    as.numeric(str_match(x,"NM:i:([^_]+)_")[2])}))) %>%
+        mutate(md=map(tags,function(x){
+                    parse_md(str_match(x,"MD:Z:([^_]+)_")[2])})) %>%
+        mutate(cigar_string=unlist(map(tags,function(x){str_match(x,"cg:Z:([^_]*)")[2]}))) %>%
+        #mutate(cigar_stats=map(map(cigar_string,cigar_string_parser),parse_cigar_stats)) %>%
+#        mutate(flag=map(X2,parse_flags)) %>% 
+#        select(-X2) %>%
+#        rename(ref=X3,seq=X10,qual=X11) %>% 
+        mutate(plate=ifelse(plate=="unknown",NA,plate)) %>%
+        separate(well,into=c('row','col'),sep=1) %>%
+	    mutate(
+            row=factor(row,levels=toupper(letters[1:16])) ,
+	        col=factor(as.numeric(col),levels=1:24)
+	        ) %>%
+        rename(
+            qlength=X2,
+            qstart=X3,
+            qend=X4,
+            tlength=X7,
+            tstart=X8,
+            tend=X9,
+            same_strand=X5,
+            matches=X10,
+            aln_length=X11,
+            ) %>%
+        mutate(
+            identity=matches/aln_length,
+            ) %>%
+#        select(-X4,-X5,-X7,-X8,-X9,-tags) %>%
+#        unnest_wider(cigar_stats) %>%
+        unnest_wider(md) %>%
+        return()
+}
+ass2ref_paf <- parse_cleaned_paf("96test---paSL4---r104_e81_sup_variant_g610_to_ref.paf")
+ass2ref_paf
+
+
+##    Col Type    Description
+##    1   string  Query sequence name
+##    2   int Query sequence length
+##    3   int Query start coordinate (0-based)
+##    4   int Query end coordinate (0-based)
+##    5   char    ‘+’ if query/target on the same strand; ‘-’ if opposite
+##    6   string  Target sequence name
+##    7   int Target sequence length
+##    8   int Target start coordinate on the original strand
+##    9   int Target end coordinate on the original strand
+##    10  int Number of matching bases in the mapping
+##    11  int Number bases, including gaps, in the mapping
+##    12  int Mapping quality (0-255 with 255 for missing)
+##When alignment is available, column 11 gives the total number of sequence matches, mismatches and gaps in the alignment; column 10 divided by column 11 gives the BLAST-like alignment identity. When alignment is unavailable, these two columns are approximate. PAF may optionally have additional fields in the SAM-like typed key-value format. Minimap2 may output the following tags:
+##    Tag Type    Description
+##    tp  A   Type of aln: P/primary, S/secondary and I,i/inversion
+##    cm  i   Number of minimizers on the chain
+##    s1  i   Chaining score
+##    s2  i   Chaining score of the best secondary chain
+##    NM  i   Total number of mismatches and gaps in the alignment
+##    MD  Z   To generate the ref sequence in the alignment
+##    AS  i   DP alignment score
+##    SA  Z   List of other supplementary alignments
+##    ms  i   DP score of the max scoring segment in the alignment
+##    nn  i   Number of ambiguous bases in the alignment
+##    ts  A   Transcript strand (splice mode only)
+##    cg  Z   CIGAR string (only in PAF)
+##    cs  Z   Difference string
+##    dv  f   Approximate per-base sequence divergence
+##    de  f   Gap-compressed per-base sequence divergence
+##    rl  i   Length of query regions harboring repetitive seeds
+
+
+#pay2polpay_alns <- tibble( 
+#        filenames=list.files(path="./","*_pairwise_aln.tsv"),
+#        ) %>%
+#    mutate(
+#        plasmid=sub("_pairwise_aln.tsv","",filenames),
+#        content=map(filenames,function(x){
+#                    read_tsv(pipe(paste0("cat '",x,"'")),
+#                        col_names=c('query','ref','score','q_length')
+#                        )
+#                })
+#        ) %>%
+#    separate(plasmid,into=c('experiment','plasmid'),sep=delimiter()) %>%
+#    unnest(content) %>%
+#    #mutate(query=str_replace(query,"([^|]+)\\|.*\\|([^|]+)","\\1|\\2")) %>%
+#    separate(query,into=c('id','sample'),sep=delimiter(),extra="merge") %>%
+#    select(-id,-filenames) %>%
+#    mutate( f_score=score/q_length ) %>%
+#    group_by(ref,plasmid) %>%
+#    mutate(
+#        #nf_score=f_score/max(f_score),
+#        n_queries=length(f_score)
+#        ) %>% 
+#    separate(ref,into=c("sample",'code','platewellvotes'),
+#        sep=delimiter(),extra="merge")  %>% 
+#    separate(platewellvotes,into=c("plate",'well','votes'),
+#        sep="-",extra="merge") %>%
+#    #select(-ref_sample) %>% 
+#    mutate(plate=ifelse(plate=="unknown",NA,plate)) %>%
+#    separate(well,into=c('row','col'),sep=1) %>%
+#    mutate(
+#        row=factor(row,levels=toupper(letters[1:16])) ,
+#        col=factor(col,levels=1:24)
+#        )
+#pay2polpay_alns %T>% {print(dim(.))} %>% sample_n(10)
+
+
+#source("cigar_string_parser.R")
+#polpay2ref_datar %>%
+#    mutate(cigar_stats=(map(cigar,function(x){cigar_string_parser(x)}))) %>%
+#    ungroup() %>% 
+#    head(10) %>% 
+#    {pmap(list(.$cigar_stats,.$md),parse_cigar_stats_and_md)}
+
+#try({
+#match_to_ref <- polpay2ref_datar %>%
+#    ungroup() %>% 
+#    rename(
+#        target=ref
+#        ) %>%
+#    mutate(polished_length=nchar(seq)) %>% 
+#    select(-seq) %>% # removing because its redundant and sometimes reversed!
+#    mutate(target=ifelse(is.na(target),'unknown',target))
+#match_to_ref %T>% {print(dim(.))} %>% 
+#    sample_n(10) %>% head %>% data.frame %>%
+#    print()
+#print('below is things where numbers dont line up:')
+#match_to_ref %>%
+#    filter(flag!='unmapped'&polished_length!=(cig_length+cig_clip-cig_deletions)) %>% 
+#    head %>% data.frame %>% print()
+#})
+#
+#well_purity <- pay2polpay_alns %>% 
+#    left_join( 
+#        payloads_datar
+#        ,by=c('experiment','plasmid','sample','plate','row','col','code','votes')
+#        ) %>%
+#    mutate(length=unlist(map(seq,nchar)))
+#well_purity %T>% {print(dim(.))} %>% sample_n(10) %>% head %>% data.frame
+#
+#print("This had better be the right length you're expecting!")
+#payload_med_length  <- well_purity %>% group_by(sample) %>%
+#    summarize(median_length=median(length,na.rm=T))
+#payload_med_length
+#med_length <- payload_med_length 
+#print(med_length)
+#print("or somethings wrong")
+#
+#message("Loaded up on the variables:
+#- payloads_datar
+#- pay2polpay_alns
+#- polpay2ref_datar
+#- match_to_ref
+#- well_purity
+#- payload_med_length")
+
+```
+
+
+
+
+```{r,check what you got,cache=T}
+polpay2ref_datar
+match_to_ref
+well_purity
+pay2polpay_alns
+payload_med_length
+med_length
+```
+
+# Analyze
+
+```{r prelim,cache=T}
+
+ass2ref_paf %>%
+    group_by(sample,plate,row,col,code) %>%
+    tally() %>% arrange(-n)
+
+ass2ref_paf %>%
+    group_by(sample,plate,row,col,code) %>%
+    select(type) %>% pull(type) %>% table
+
+ass2ref_paf %>%
+    group_by(sample,plate,row,col,code) %>%
+    ggplot()+theme_bw()+
+    aes(x=identity)+
+    geom_histogram()+
+    NULL
+
+ass2ref_paf %>%
+    group_by(sample,plate,row,col,code) %>%
+    ggplot()+theme_bw()+
+    aes(x=qlength/tlength*identity)+
+    geom_histogram(bins=100)+
+    scale_x_continuous(breaks=seq(0.1,2,0.1))+
+    NULL
+
+polass2ref_datar
+
+ass2ref_paf %>%
+    group_by(sample,plate,row,col,code) %>%
+    mutate(contigs=length(contig)) %>%
+    ggplot()+theme_bw()+
+    aes(x=qlength/tlength*identity,fill=same_strand)+
+    facet_wrap(~contigs+contig)+
+    geom_histogram()+
+    NULL
+
+g <- ass2ref_paf %>%
+    group_by(sample,plate,row,col,code) %>%
+    mutate(contigs=length(contig)) %>%
+    ggplot()+theme_bw()+
+    aes(x=qlength/tlength,y=nm+0.1,col=identity)+
+    geom_point(alpha=0.5)+
+    scale_y_log10()+
+    NULL
+g
+ggsave(paste0(Sys.Date,"_volcanolike.jpeg"),g,width=7,height=5)
+
+ass2ref_paf %>%
+    group_by(sample,plate,row,col,code) %>%
+    arrange(-identity) %>%
+    mutate(contigs=length(unique(contig))) %>%
+    ungroup()%>%
+    mutate(contig=factor(contig)) %>%
+    ggplot()+theme_bw()+
+    aes(x=qlength,fill=contig)+
+    #facet_wrap(~contigs)+
+    geom_histogram(bins=100)+
+    geom_vline(aes(xintercept=tlength))+
+    NULL
+
+
+
+assembled_datar
+
+
+polass2ref_datar
+```
+
+
+```{r,n_payloads_per_sample,cache=T}
+
+order_sample_names <- function(x){
+    x %>% 
+        mutate(sample=sub("(\\d+)","_\\1",sample)) %>%
+        separate(sample,into=c('sample_prefix','sample_number')) %>%
+        arrange(as.numeric(sample_number)) %>%
+        unite(col='sample',c('sample_prefix','sample_number'),sep="") %>%
+        mutate(sample=factor(sample,levels=unique(sample))) %>%
+        return()
+}
+
+
+pay2polpay_alns %>% 
+    group_by(sample,plate) %>% 
+    tally() %>% arrange(-n) %>% 
+    filter(plate!="unknown") %>%
+    order_sample_names %>%
+    ggplot()+theme_bw()+
+    aes(x=sample,y=n,col=plate)+
+    geom_point()+
+    scale_y_continuous(limits=c(0,NA))+
+    theme(axis.text.x=element_text(angle=90))+
+    ylab("Usable reads per sample, plate")+
+    NULL
+
+payloads_datar %>%
+    group_by(sample,plate) %>% 
+    tally() %>% arrange(-n) %>% 
+    filter(plate!="unknown") %>%
+    order_sample_names %>%
+    ggplot()+theme_bw()+
+    aes(x=sample,y=n,col=plate)+
+    geom_point()+
+    scale_y_continuous(limits=c(0,384))+
+    theme(axis.text.x=element_text(angle=90))+
+    ylab("Payloads polished")+
+    NULL
+
+pay2polpay_alns %>% 
+    group_by(sample,plate) %>% 
+    tally(name='reads') %>%
+    left_join(
+        payloads_datar %>%
+            group_by(sample,plate) %>% 
+            tally(name='payloads')
+        ,by=c('sample','plate')) %>%
+    filter(plate!="unknown") %>%
+    {
+    ggplot(.)+theme_bw()+
+    aes(x=reads,y=payloads,label=sample,col=plate)+
+    geom_point()+
+    geom_text_repel(
+        data=mutate(.,cutoff=quantile(.$payloads[.$payloads>50],0.1)) %>%
+            filter(payloads>50,payloads<cutoff),
+        max.overlaps=12)+
+    scale_y_continuous(limits=c(0,384))+
+    ylab("Payloads polished")+
+    xlab("Usable reads per sample")+
+    NULL
+    }
+
+pay2ref_alns %>% 
+    group_by(sample,plate) %>% 
+    filter(plate!="unknown") %>%
+    mutate(frac_match=aln_score/length) %>%
+    {
+    ggplot(.)+theme_bw()+
+    aes(x=sample,y=frac_match,col=plate)+
+    facet_wrap(~plasmid,scales="free")+
+    geom_violin()+
+    scale_y_log10(limits=c(0.9,1))+
+    theme(axis.text.x=element_text(angle=90))+
+    #scale_y_continuous(limits=c(0,384))+
+    #ylab("Payloads polished")+
+    #xlab("Usable reads per sample")+
+    NULL
+    }
+
+pay2ref_alns %>% 
+    group_by(sample,plate) %>% 
+    filter(plate!="unknown") %>%
+    mutate(frac_match=aln_score/length) %>%
+    {
+    ggplot(.)+theme_bw()+
+    aes(x=frac_match)+
+    facet_wrap(~plasmid,scales="free")+
+    geom_histogram(bins=200)+
+    scale_x_log10(limits=c(0.9,1))+
+    #scale_y_continuous(limits=c(0,384))+
+    #ylab("Payloads polished")+
+    #xlab("Usable reads per sample")+
+    NULL
+    }
+
+pay2ref_alns %>% 
+    group_by(sample,plate) %>% 
+    filter(plate!="unknown",plasmid=='1064x937') %>%
+    mutate(frac_match=aln_score/length) %>%
+    {
+    ggplot(.)+theme_bw()+
+    aes(x=frac_match)+
+    facet_wrap(~plasmid,scales="free")+
+    geom_histogram(bins=200)+
+    scale_x_log10(limits=c(0.99,1))+
+    #scale_y_continuous(limits=c(0,384))+
+    #ylab("Payloads polished")+
+    #xlab("Usable reads per sample")+
+    NULL
+    }
+
+
+```
+
+
+
+
+
+```{r,how_do_assemblies_look,cache=T}
+
+g <- match_to_ref %>%
+    filter(plate!="unknown") %>%
+    group_by(experiment,plasmid,sample,plate) %>%
+    filter(any(nm>0)) %>%
+    #filter(grepl("sample1",sample),plate=="A") %>% 
+    ungroup() %>%
+    filter(sample %in% head(unique(sample),5)) %>%
+    mutate(polished_errors=ifelse(
+        nm>0,
+        ifelse(nm>3,"more than 3","1-3"),
+        "perfect")
+        ) %>%
+    mutate(polished_errors=factor(polished_errors,
+                levels=sort(unique(polished_errors)))) %>%
+    mutate(row=factor(as.character(row),levels=rev(toupper(letters)))) %>%
+    ggplot()+theme_classic()+
+    aes(x=col,y=row,color=polished_errors)+
+    geom_point()+
+    facet_wrap(~experiment+sample+plate,labeller=labeller(label_both,.multi_line=F))+
+    theme(legend.position="top")+
+    NULL
+g
+
+ggsave(paste0(Sys.Date(),"_bps_errors_plate.jpeg"),g,width=7,height=5)
+
+#match_to_ref %>% filter(sample=="sample4",row=="K",col==19,plate=="A") %>% 
+#    select(sample,plate,row,col,votes,target,cs,cigar,polished_seq)
+
+g <- match_to_ref %>%
+    filter(plate!="unknown") %>%
+    #pivot_longer(c(polished_insertions,polished_deletions,polished_mismatch)) %>%
+    ggplot()+theme_bw()+
+    #facet_wrap(~name)+
+    aes(x=nm)+
+    geom_histogram(bins=50)+
+    xlab("edit distance to aligned reference")+
+    NULL
+g
+
+ggsave(paste0(Sys.Date(),"_bps_errors_histogram_type.jpeg"),g,width=7,height=5)
+
+
+g <- match_to_ref %>%
+    filter(plate!="unknown") %>%
+    ggplot()+theme_classic()+
+    aes(x=nm/polished_length)+
+    xlab("edit distance over length")+
+    geom_histogram()+
+    scale_x_log10()+
+    NULL
+g
+
+ggsave(paste0(Sys.Date(),"_bps_error_rate_per_well.jpeg"),g,width=7,height=5)
+
+g<- match_to_ref %>%
+    filter(plate!="unknown") %>%
+    left_join(med_length,by='sample') %>%
+    ggplot()+theme_classic()+
+    aes(x=interaction(plate,row,col),y=polished_length)+
+    geom_point()+
+    geom_hline(aes(yintercept=median_length),col="red",linetype="dashed")+
+    facet_wrap(~sample,scales='free',
+        labeller=function(x){label_both(x,multi_line=F)})+
+    xlab('each well')+
+    ylab('length of polished payload\n( red line is median )')+
+    scale_y_continuous(limits=c(0,NA))+
+    theme(axis.text.x=element_blank(),axis.ticks.x=element_blank())+
+    NULL
+g
+
+ggsave(paste0(Sys.Date(),"_bps_length_polished_per_well.jpeg"),g,width=8,height=16)
+
+
+```
+
+
+
+# Purity - are the wells mixed?
+
+
+
+```{r,purity_plots,cache=T}
+
+g <- well_purity %>%
+    select(experiment,sample,plate,plasmid,row,col,n_queries) %>%
+    distinct() %>% 
+    ggplot()+theme_classic()+
+    aes(x=n_queries,group=interaction(plasmid,experiment,sample,plate),
+        col=interaction(plasmid,sample))+
+    #guides(col='none')+
+    stat_density(geom="line",aes(y=..count..),position="identity",alpha=0.5)+ 
+    scale_x_log10("reads per well")+#limits=c(0.5,NA))+
+    #facet_wrap(~experiment+sample+plate,scales="free_y",labeller=labeller(label_both,.multi_line=F))+
+    NULL
+g
+
+ggsave(paste0(Sys.Date(),"_number_of_reads_per_well.jpeg"),g,width=7,height=5)
+
+g <- well_purity %>%
+    select(experiment,sample,plate,plasmid,row,col,f_score,n_queries) %>%
+    distinct() %>% 
+    ggplot()+theme_classic()+
+    aes(x=f_score,col=n_queries>=30)+
+    #geom_histogram(breaks=seq(-0.005,1.005,0.003))+
+    stat_bin(geom='line',position='identity',breaks=seq(-0.005,1.005,0.003))+
+    scale_x_log10(limits=c(0.5,1))+
+    scale_y_log10()+
+    facet_wrap(~sample,scales="free",labeller="label_both")+
+    xlab('fractional identity of each raw payload with polished consensus')+
+    NULL
+g
+
+g <- well_purity %>%
+    select(experiment,sample,plate,plasmid,row,col,f_score,n_queries) %>%
+    distinct() %>% 
+    ggplot()+theme_classic()+
+    aes(x=f_score)+
+    geom_histogram(breaks=seq(-0.005,1.005,0.003))+
+    scale_x_log10(limits=c(0.7,1))+
+    facet_wrap(~n_queries>=30,scales="free",labeller="label_both")+
+    xlab('fractional identity of each raw payload with polished consensus')+
+    NULL
+g
+
+ggsave(paste0(Sys.Date(),"_fscore_for_low_coverage_payloads.jpeg"),g,width=7,height=5)
+
+## redundant with before I think
+#g <- well_purity %>%
+#    ungroup() %>%
+#    filter(!is.na(plate)) %>%
+#    select(length,experiment,sample,plate,code) %>% 
+#    distinct() %>% 
+#    {
+#    ggplot(.)+theme_classic()+
+#    aes(x=length)+
+#    geom_histogram(bins=200) + #breaks=seq(min(.$length,na.omit=T),max(.$length,na.omit=T),05))+
+#    geom_vline(xintercept=median(.$length),col="red",linetype="dashed")+
+#    annotate(geom="label",y=100,x=median(.$length)-0.5*sd(.$length),
+#        label=str_c("median ",median(.$length)))+
+#    facet_wrap(~sample,scales='free')+
+#    scale_x_log10(limits=c(
+#                            10, #median(.$length)-1*sd(.$length),
+#                            median(.$length)+1*sd(.$length)
+#                            ) )+
+#    NULL
+#    }
+#g
+#
+#ggsave(paste0(Sys.Date(),"_lengths_of_payloads.jpeg"),g,width=7,height=5)
+
+#g <- well_purity %>%
+#    filter(!is.na(plate))%>%
+#    #mutate(length=ifelse(is.na(length),0,length)) %>%
+#    mutate(right_length=length==med_length) %>%
+#    #facet_grid((length<(med_length-4)|length>(med_length+4))~.,scales="free_y")+#,labeller="label_both")+
+#    ggplot()+theme_classic()+
+#    aes(x=f_score)+
+#    geom_histogram(bins=200) + 
+#    facet_grid(right_length~.,scales="free_y",labeller="label_both")+
+#    ggtitle("Faceted on if it's 4 or more away from median")+
+#    scale_x_log10(limits=c(0.5,1.0),breaks=seq(0.5,1,0.05))+
+#    geom_vline(xintercept=0.90,col="red")+
+#    NULL
+#g
+#
+#ggsave(paste0(Sys.Date(),"_purity_of_payloads_by_length_wrong.jpeg"),g,width=7,height=5)
+
+g <- pay2polpay_alns %>%
+    group_by(experiment,plasmid,sample,code,plate,row,col) %>%
+    summarize(
+        mean_fscore=mean(f_score),
+        median_fscore=median(f_score),
+        n_queries=unique(n_queries)
+        ) %>%
+    ggplot()+theme_classic()+
+    aes(y=median_fscore,x=n_queries)+
+    geom_density_2d()+
+    geom_point(size=0.2,alpha=0.2)+
+    scale_x_log10()+
+    scale_y_log10(limits=c(0.4,1))+
+    NULL
+g
+
+ggsave(paste0(Sys.Date(),"_fscore_over_coverage.jpeg"),g,width=7,height=5)
+
+```
+
+```{r,intuition_please,cache=T}
+
+g<- well_purity%>% filter(!is.na(plate))  %>% 
+    filter(plasmid==plasmid[1]
+        ,sample==sample[1]
+        ,plate=="A"
+        ,row%in%c("A","B","C")
+        #,col%in%c(12,13,14)
+        ) %>% #,"B","C","D","E","F","G","H"
+    #mutate(correct_length=(length==med_length)) %>%
+    {
+    ggplot(.)+theme_classic()+
+    aes(col=interaction(sample,plate,row,col),x=f_score)+
+    stat_density(geom="line",position="identity")+
+    facet_grid(sample~row,scales="free",
+        labeller=label_both)+ 
+    guides(col='none')+
+    scale_x_log10(limits=c(0.7,1.0))+
+    geom_vline(data=ungroup(.) %>% dplyr::select(plate,sample,row,col) %>% 
+            mutate(f_score=list(c(.85,.9,.95,.98)),row=NA,col=NA) %>%
+            unnest(f_score) %>%
+            mutate(row=list(c("A","B","C"))) %>% unnest(row) %>%
+            distinct() ,
+        aes(xintercept=f_score))+
+    geom_label(data=ungroup(.) %>% dplyr::select(plate,sample,row,col) %>% 
+            mutate(f_score=list(c(.85,.9,.95,.98)),row=NA,col=NA) %>%
+            unnest(f_score) %>%
+            mutate(row=list(c("A","B","C"))) %>% unnest(row) %>%
+            distinct() ,
+        aes(label=f_score),y=0)+
+    NULL
+    }
+g
+
+ggsave(paste0(Sys.Date(),"_bps_example_scores_three_rows.jpeg"),g,width=7,height=5)
+
+```
+
+```{r,decide_yo,cache=T}
+
+pdatar <- well_purity %>%
+    filter(!is.na(plate))%>%
+#    mutate(
+#        aberrant_length= length!=med_length
+#        ) %>%
+    group_by(experiment,sample,plate,row,col) 
+pdatar
+
+# cutoff threshold
+quantile_depth <- quantile(pdatar$n_queries,probs=.01)
+cutoff_for_depth <- max(5,quantile_depth)
+
+pdatar %>% 
+    ggplot()+theme_bw()+
+    aes(x=n_queries)+
+    geom_histogram(bins=200)+ 
+    geom_vline(xintercept=quantile_depth,col="blue",lty="dashed")
+
+pdatar %>% 
+    ggplot()+theme_classic()+
+    #aes(col=aberrant_length,x=f_score)+
+    aes(x=f_score)+
+    stat_density(geom="line",position="identity",adjust=0.1)+
+    geom_vline(xintercept=c(0.85,.9,.95))+
+    scale_x_log10(limits=c(0.5,1.0),
+        breaks=seq(0.5,1,.05),labels=seq(0.5,1,.05))+
+    NULL
+
+print("use 0.90 identity i guess")
+
+pdatar %>% 
+    #filter(!aberrant_length) %>% 
+    mutate(on_target=f_score>0.90) %>%
+    group_by(experiment,sample,plate,row,col,n_queries) %>%
+    summarize(purity=sum(on_target)/length(on_target)) %>%
+    ggplot()+theme_classic()+
+    aes(x=purity)+
+    geom_histogram(bins=200)+
+    facet_wrap(~n_queries>=cutoff_for_depth,labeller="label_both")+
+    xlab("Fraction of reads per well agreeing with consensus")+
+    ylab("Count of wells")+
+    NULL
+
+```
+
+That last one shows us that totally pure calls are likely just by chance not
+sampling the minor variant per well. 
+    
+
+```{r,setupCalledAllAndOutput,cache=T}
+
+
+
+called_all <- well_purity %>%
+    filter(sample!="") %>%
+    filter(!is.na(plate)) %>% 
+    group_by(experiment,sample,plate,row,col,code) %>%
+    mutate(
+        main_plasmid=plasmid[order(n_queries,decreasing=T)[1]],
+        ) %>%
+    mutate(on_target=f_score>0.90 ) %>% 
+    mutate(
+        purity=sum(on_target)/length(on_target),
+        ) %>%
+    ungroup() %>%
+    select(
+        -nm,
+        -starts_with("cig_"),
+        -starts_with("md_"),
+        -starts_with("X"),
+        -score,-q_length,-f_score,-on_target
+        ) %>%
+    left_join(
+        match_to_ref %>% 
+            select(experiment,plasmid,sample,plate,row,col,code,
+                target,
+                nm,
+                starts_with("cig_"),
+                starts_with("md_")
+                ) %>%
+            distinct()
+        ,by=c('experiment','plasmid','sample','plate','row','col','code')
+        ) %>% 
+    group_by(experiment,plasmid,sample,plate,row,col,code) %>%
+    mutate( main_target=target[order(n_queries,decreasing=T)[1]] ) %>%
+    rename(sequence=seq,coverage=n_queries) %>%
+#    select(experiment,sample,plate,row,col,code,
+#        coverage=n_queries, length,
+#        main_plasmid,plasmid,main_target,target,
+#        polished_length,
+#        starts_with("purity")) %>% 
+    arrange(experiment,sample,plate,row,col,nm) %>% 
+    filter(!is.na(sequence)) %>%
+    distinct() %>%
+    left_join(
+        pay2ref_alns %>% 
+            mutate(first_gap=map(payload_seq,function(x){
+                        suppressWarnings(min(which(str_split(x,"",simplify=T)=='-')))
+                    })) %>%
+            mutate(full_length=(first_gap>=(length-3)&aln_score>=0.9*length)) %>%
+            ungroup() %>%
+            select(experiment,plasmid,sample,plate,row,col,code,full_length) %>%
+            distinct()
+        ,by=c('experiment','plasmid','sample','plate','row','col','code')
+        ) %>% 
+    group_by(experiment,sample,plate,row,col,code) %>%
+    mutate(
+        matched= nm==0 & target != '*' ,
+        pure = purity>0.90 & coverage>=cutoff_for_depth,
+        total_coverage=sum(coverage),
+        ) %>%
+    ungroup() %>% 
+    #mutate(group=0) %>%
+    arrange(experiment,sample,plate,row,col) %>%
+    mutate(sample_group=ifelse(grepl("lasso",sample),'lasso','donorbarcode')) %>%
+    select(
+        experiment,
+        sample,
+        plate,
+        row,
+        col,
+        coverage,
+        pure,
+        purity,
+        matched,
+        full_length,
+        main_target,
+        target,
+        main_plasmid,
+        plasmid,
+        code,
+        sequence,
+        sample_group,
+        ) 
+called_all
+
+
+called_all %>% 
+    {names(.) <- str_c(names(.),seq_along(names(.)),sep='_');.}
+
+called_all %>% 
+    group_by(sample_group,pure,matched,full_length) %>%
+    tally()
+
+called_all %>% head %>% data.frame
+
+called_all %>% 
+    {names(.) <- str_c(names(.),seq_along(names(.)),sep='_');.} %>%
+    write_csv(paste0(Sys.Date(),"_bps_calls.csv"))
+
+called_all %>% 
+    mutate(sample_group=ifelse(grepl("lasso",sample),'lasso','donorbarcode')) %>%
+    filter(sample_group=='lasso') %>% 
+    {names(.) <- str_c(names(.),seq_along(names(.)),sep='_');.} %>%
+    write_csv(paste0(Sys.Date(),"_bps_calls_lasso.csv"))
+called_all %>% 
+    mutate(sample_group=ifelse(grepl("lasso",sample),'lasso','donorbarcode')) %>%
+    filter(sample_group=='donorbarcode') %>% 
+    {names(.) <- str_c(names(.),seq_along(names(.)),sep='_');.} %>%
+    write_csv(paste0(Sys.Date(),"_bps_calls_donorbarcode.csv"))
+
+```
+
+```{r,dubs,cache=T}
+
+called_all %>% 
+    filter(pure,matched) %>%
+    group_by(sample,plate,row,col,plasmid,main_plasmid) %>% 
+    tally() %>% arrange(-n)
+
+called_all %>% 
+    group_by(sample,plate,row,col,plasmid,main_plasmid) %>% 
+    tally() %>% arrange(-n,sample,plate,row,col,plasmid)
+
+called_all %>% 
+    filter(pure) %>% 
+    group_by(sample,plate,row,col,main_plasmid) %>% 
+    tally() %>% arrange(-n,sample,plate,row,col)
+
+```
+
+```{r,analyze weiyibps,cache=T}
+
+#orfz <- called_all %>% 
+#    filter(pure,matched) %>%
+#    select(experiment,plasmid,target,sample,plate,row,col,coverage,polished_length)
+
+called_all %>% 
+    filter(pure) 
+
+called_all %>% 
+    group_by(target) %>% 
+    tally() %>% arrange(-n) 
+
+called_all %>% 
+    filter(pure,full_length,matched) %>%
+    group_by(target) %>% 
+    tally() %>% arrange(-n) 
+
+g <- called_all %>%
+    #filter(pure,matched) %>%
+    filter(pure,full_length,matched) %>%
+    mutate(sample_group=ifelse(grepl("lasso",sample),'lasso','donorbarcode')) %>%
+    group_by(sample_group,target,pure) %>% 
+    tally() %>%
+    ggplot()+theme_bw()+
+    aes(x=n)+
+    geom_histogram()+
+    facet_wrap(sample_group~pure,labeller=label_both)+
+    scale_x_log10()+
+    xlab("Pure & matched clones recovered per payload")
+g
+
+ggsave(paste0(Sys.Date(),"_clones_per_payload.jpeg"),g,width=7,height=5)
+
+g <- called_all %>%
+    #filter(pure,matched) %>%
+    mutate(sample_group=T) %>% #ifelse(grepl("lasso",sample),'lasso','donorbarcode')) %>%
+    #filter(sample_group=='lasso') %>%
+    filter(pure,full_length,matched) %>%
+    group_by(sample_group,plasmid,experiment,sample,target,pure) %>%
+    tally() %>%
+    ggplot()+theme_bw()+
+    aes(x=interaction(factor(plasmid),factor(experiment),factor(sample)), y=n)+
+    xlab("Clones recovered per target")+
+    facet_wrap(sample_group~pure,labeller=label_both)+
+    scale_y_log10()+
+    theme(axis.text.x=element_text(angle=90))+
+    NULL
+g+geom_line(
+    aes(group=interaction(factor(plasmid),factor(experiment),factor(target))) ,
+        alpha=0.2
+        )
+
+ggsave(paste0(Sys.Date(),"_clones_per_payload_by_sample_line.jpeg"),
+    g+geom_line(
+        aes(group=interaction(factor(plasmid),factor(experiment),factor(target))) ,
+            alpha=0.2
+            )
+    ,width=7,height=5)
+
+```
+
+
+

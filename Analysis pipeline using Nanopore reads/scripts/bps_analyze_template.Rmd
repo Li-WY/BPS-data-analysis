@@ -1,0 +1,559 @@
+---
+title: "Reporting and analysis of BPS calls"
+---
+
+```{r,echo=F}
+library(tidyverse)
+library(magrittr)
+library(stringdist)
+library(viridis)
+library(parallel)
+
+#rmarkdown::render("bps_calls.Rmd",output_dir=getwd(),knit_root_dir=getwd(),intermediates_dir=getwd())
+```
+
+```{r,funcs,cache=F}
+
+source("cigar_string_parser.R")
+
+parse_dat_sam <- function(this_tibble) {
+    this_tibble %>%
+        separate(rest,
+            into=c("flag","ref","pos","mapq","cigar",
+                "altref","altpos","altq",
+                "seq","quality","tags"),
+            sep="\\t",extra="merge") %>%
+        rowwise() %>%
+        mutate(gene=str_split(str_extract(tags,"XF:Z:[^\\t]+"),":")[[1]][3]) %>%
+        ungroup() %>%
+        mutate(row=factor(row,levels=rev(sort(unique(as.character(row)))))) %>%
+        return()
+}
+
+parse_cigar_stats_to_stuff <- function(cigar_stats) {
+    tibble(
+        aln_length=max(cigar_stats$position_in_aln,na.rm=T)
+        ,
+        aln_errors=sum(as.numeric(
+                cigar_stats[cigar_stats$operations%in%c("I","D","X"),
+                    ]$lengths),
+            na.rm=T)
+        ,
+        aln_insertions=sum(as.numeric(
+                cigar_stats[cigar_stats$operations%in%c("I"),
+                    ]$lengths),
+            na.rm=T)
+        ,
+        aln_deletions=sum(as.numeric(
+                cigar_stats[cigar_stats$operations%in%c("D"),
+                    ]$lengths),
+            na.rm=T)
+        ,
+        aln_mismatch=sum(as.numeric(
+                cigar_stats[cigar_stats$operations%in%c("cigar_stats"),
+                    ]$lengths),
+            na.rm=T)
+        ) 
+}
+
+```
+
+
+```{r, load_datarz, cache=T}
+
+this_id <- readLines("id")
+
+called_all <- read_csv("bps_calls.csv")
+
+```
+
+
+```{r,d374 analyses,cache=T}
+
+called <- called_all %>% filter(sample!="barcode20")
+controls <- called_all %>% filter(sample=="barcode20")
+
+called %>% 
+    filter( matched, pure ) %>%
+    write_csv(paste0(Sys.Date(),"_bps_oligo_matched_pure.csv"))
+
+controls %>% 
+    write_csv(paste0(Sys.Date(),"_bps_controls.csv"))
+
+```
+
+
+```{r,plotz,cache=T}
+
+called %>% 
+    filter(matched,pure) %>% 
+    group_by(target) %>% 
+    tally() %>% arrange(-n)
+
+called %>% 
+    filter(matched,pure) %>% 
+    group_by(target) %>% 
+    summarize(seen_in=length(target)) %>%
+    filter(target!="*") %>%
+    {print(str_c("We find ",length((.$target))," unique oligos with no errors",
+            ", in ",sum(.$seen_in)," wells"))}
+
+called %>% 
+    filter(matched,pure,purity==1) %>% 
+    group_by(target) %>% 
+    summarize(seen_in=length(target)) %>%
+    filter(target!="*") %>%
+    {print(str_c("We find ",length((.$target))," unique oligos with no errors",
+            ", with 100% absolute purity of good align reads",
+            ", in ",sum(.$seen_in)," wells"))}
+
+called %>% 
+    filter(pure) %>% 
+    group_by(target) %>% 
+    summarize(seen_in=length(target)) %>%
+    filter(target!="*") %>%
+    {print(str_c("We find ",length((.$target))," pure colonies of targets",
+            ", in ",sum(.$seen_in)," wells,including errors"))}
+
+
+g<- called_all %>%
+    filter(!is.na(target),sample!='unclassified') %>% 
+    group_by(sample,control=grepl("poolOne",target),matched,pure) %>% 
+    tally() %>% arrange(sample,control,matched,pure) %>%
+    ggplot()+theme_classic()+
+    aes(x=control,fill=interaction(matched,pure),y=n)+
+    facet_wrap(~sample)+
+    scale_y_continuous(limits=c(0,768))+
+    geom_bar(stat='identity')+
+    NULL
+g
+
+ggsave(paste0(Sys.Date(),"_barplot_matched_pure_per_sample.jpeg"),g)    
+
+
+g<-called %>% 
+    filter(matched,pure) %>% 
+    group_by(target) %>% 
+    summarize(seen_in=length(target)) %>%
+    filter(target!="*") %>%
+    {
+    ggplot(.)+theme_classic()+
+    aes(x=seen_in)+
+    geom_histogram(breaks=seq(-0.5,max(.$seen_in)+5.5,by=2))+
+    xlab("Times oligo recovered in pure correct well")+
+    ylab("Oligos")+
+    NULL
+    }
+g
+
+ggsave(paste0(Sys.Date(),"_bps_recovery_no_errors_pure.jpeg"),g,width=5,height=5)
+
+pdatar <- called %>%
+    filter(sample=="barcode10",plate!="unknown") %>%
+    mutate(
+        the_label=c(
+                "neither",
+                "100% matched",
+                "pure well",
+                "100% matched pure well"
+                )[1+matched + 2*pure]
+        ) %>%
+    mutate(the_label=ifelse(is.na(the_label),"neither",the_label)) %>%
+    mutate(
+        row=factor(row,sort(unique(row),decreasing=T)) ,
+        the_label=factor(the_label,levels=c(
+                "100% matched pure well",
+                "pure well",
+                "100% matched",
+                "neither"
+                ))
+        ) 
+pdatar
+
+
+g <- pdatar %>%
+    ggplot()+theme_classic()+
+    aes(x=col,y=row,fill=the_label)+
+    geom_tile(color="black")+
+    #facet_grid(plate~sample)+
+    facet_wrap(~plate,ncol=1,labeller="label_both")+
+    scale_fill_grey("")+
+    xlab("Column")+
+    ylab("Row")+
+    theme(legend.position="top")+
+    NULL
+g
+ggsave(paste0(Sys.Date(),"_bps_recovery_of_2_plate_if_matched_if_pure_fix.jpeg"),g,width=6,height=7)
+
+g <- pdatar %>%
+    mutate(the_label=ifelse(grepl('pure',the_label),'pure','mixed')) %>%
+    mutate(the_label=factor(the_label,levels=rev(sort(unique(the_label))))) %>% 
+    ggplot()+theme_classic()+
+    aes(x=col,y=row,fill=the_label)+
+    geom_tile(color="white")+
+    theme(legend.position="top")+
+    facet_wrap(~plate,ncol=1,labeller="label_both")+
+    scale_fill_grey()+
+    xlab("Column")+
+    ylab("Row")+
+    #guides(col="none")+
+    NULL
+g
+ggsave(paste0(Sys.Date(),"_bps_recovery_of_2_plate_if_pure.jpeg"),g,width=6,height=7)
+
+
+g <- called %>%
+    filter(pure) %>% 
+    ggplot()+theme_bw()+
+    aes(x=errors,y=length)+
+    geom_point()+
+    #geom_histogram(bins=50)+
+    #xlab("errors of polished compared to reference")+
+    NULL
+g
+
+ggsave(paste0(Sys.Date(),"_bps_lots_of_errors_are_truncations.jpeg"),g,width=7,height=5)
+
+g <- called %>%
+    filter(purity>0.90 & coverage >= 50 & length>244-24.4 & length < 244+24.4) %>% 
+    ggplot()+theme_classic()+
+    aes(x=errors)+
+    geom_histogram(bins=50)+
+    xlab("Errors of errors of polished compared to reference")+
+    NULL
+g
+ggsave(paste0(Sys.Date(),"_bps_errors_histogram_similar_length.jpeg"),g,width=5,height=5)
+
+g <- called %>%
+    filter(purity>0.90 & coverage >= 50 & length>244-24.4 & length < 244+24.4,!is.na(target)) %>% 
+    ggplot()+theme_classic()+
+    aes(x=errors)+
+    geom_histogram(bins=50)+
+    xlab("Errors of errors of polished compared to reference")+
+    NULL
+g
+ggsave(paste0(Sys.Date(),"_bps_errors_histogram_similar_length_onlyTargets.jpeg"),g,width=5,height=5)
+
+g <- called %>%
+    filter(purity>0.90 & coverage >= 50) %>%
+    ggplot()+theme_classic()+
+    aes(x=errors)+
+    geom_histogram(bins=50)+
+    xlab("Errors of polished consensus sequence,\ncompared to reference")+
+    ylab("Wells")+
+    scale_x_continuous(limits=c(-0.5,25)) +
+    NULL
+g
+
+ggsave(paste0(Sys.Date(),"_bps_accuracy_errors_histogram_all_lengths.jpeg"),g,width=5,height=5)
+
+
+g <- called %>%
+    filter(plate!="unknown") %>% 
+    ggplot()+theme_classic()+
+    aes(x=purity)+
+    geom_histogram(bins=100)+
+    xlab("Purity\n( Per-well fraction of un-corrected reads with 90% identity to the well's consensus )")+
+    ylab("Wells")+
+    NULL
+g
+
+ggsave(paste0(Sys.Date(),"_bps_purity.jpeg"),g,width=5,height=5)
+
+g <- called %>%
+    filter(plate!="unknown") %>% 
+    ggplot()+theme_classic()+
+    aes(x=purity,y=coverage)+
+    #geom_histogram(bins=100)+
+    geom_point(size=0.1)+
+    scale_y_log10()+
+    xlab("Purity\n( Per-well fraction of un-corrected reads with 90% identity to the well's consensus )")+
+    ylab("Coverage")+
+    geom_vline(xintercept=c(0.90,.95,.97),color="gray")+
+    geom_text(data=data.frame(x=c(0.90,.95,.97),y=10)%>%mutate(label=x),
+        aes(x=x,y=y,label=label),angle=90)+
+    NULL
+g
+
+ggsave(paste0(Sys.Date(),"_bps_purity_vs_coverage.jpeg"),g,width=5,height=5)
+
+```
+
+```{r,controls}
+
+
+
+g <- controls %>% 
+    ggplot()+theme_classic()+
+    aes(x=as.numeric(col),y=row,fill=log10(coverage))+
+    geom_tile()+
+    scale_fill_gradient(low="#ffffff",high="#000000")+
+    NULL
+g
+
+g <- controls %>% 
+    mutate(
+        right_pool = grepl("poolOne",target)
+        ) %>% 
+    mutate(
+        the_label=c(
+                "neither",
+                "pure",
+                "right target",
+                "pure, right target"
+                )[1+pure + 2*right_pool]
+        ) %>%
+    mutate(the_label=ifelse(is.na(the_label),"neither",the_label)) %>%
+    mutate(
+        row=factor(row,sort(unique(row),decreasing=T)) ,
+        the_label=factor(the_label,levels=c(
+                "pure, right target",
+                "right target",
+                "pure",
+                "neither"
+                ))
+        ) %>%
+    ggplot()+theme_classic()+
+    aes(x=col,y=row,fill=the_label)+
+    geom_tile(color="black")+
+    facet_wrap(~plate,ncol=1,labeller="label_both")+
+    scale_fill_grey("")+
+    xlab("Column")+
+    ylab("Row")+
+    theme(legend.position="top")+
+    NULL
+g
+ggsave(paste0(Sys.Date(),"_bps_recovery_of_handmix.jpeg"),g,width=6,height=7)
+
+```
+
+
+```{r,coverage role,cache=T}
+
+g <- called %>% 
+    filter(coverage>=50)%>%
+    ggplot()+theme_classic()+
+    aes(y=coverage,x=purity)+
+    geom_hex()+
+    scale_fill_viridis_c()+
+    scale_y_log10()+
+    ylab("coverage (reads used to polish consensus),\nat least 50 reads")+
+    geom_vline(xintercept=c(0.90,.95,.97),color="gray")+
+    geom_text(data=data.frame(x=c(0.90,.95,.97),y=10)%>%mutate(label=x),
+        aes(x=x,y=y,label=label),angle=90)+
+    NULL
+g
+
+ggsave(paste0(Sys.Date(),"_bps_purity_vs_coverage_hexbin.jpeg"),g,width=5,height=5)
+
+
+```
+
+```{r,hand-mixed,cache=T}
+
+g <- called_all %>% filter(sample=="barcode20") %>%
+    filter(coverage>=50) %>%
+    ggplot()+theme_classic()+
+    aes(y=coverage,x=purity)+
+    #geom_hex()+
+    geom_point(size=0.1)+
+    scale_fill_viridis_c()+
+    scale_y_log10()+
+    ylab("coverage (reads used to polish consensus),\nat least 50 reads")+
+    geom_vline(xintercept=c(0.90,.95,.97),color="gray")+
+    geom_text(data=data.frame(x=c(0.90,.95,.97),y=10)%>%mutate(label=x),
+        aes(x=x,y=y,label=label),angle=90)+
+    NULL
+g
+
+
+g <- called_all %>% filter(sample=="barcode20") %>%
+    filter(coverage>=50) %>%
+    ggplot()+theme_classic()+
+    aes(x=purity)+
+    geom_histogram(bins=200)+
+    scale_x_log10()+
+    NULL
+g
+
+
+g <- called_all %>% filter(sample=="barcode20") %>%
+    filter(coverage>=50) %>%
+    ggplot()+theme_classic()+
+    aes(x=interaction(plate,row,col),y=purity)+
+    geom_point(size=0.1)+
+    scale_y_log10()+
+    theme(axis.text.x=element_blank())+
+    NULL
+g
+
+
+g <- called_all %>%
+    filter(sample=="barcode20",plate!="unknown") %>%
+    mutate(col=as.numeric(col)) %>%
+    mutate(
+        matched= length==244 & errors==0 ,
+        pure = purity>0.90 & coverage>=50,
+        ) %>% 
+    mutate(
+        the_label=c(
+                "neither",
+                "100% matched",
+                "pure well",
+                "100% matched pure well"
+                )[1+matched + 2*pure]
+        ) %>%
+    mutate(the_label=ifelse(is.na(the_label),"neither",the_label)) %>%
+    mutate(
+        row=factor(row,sort(unique(row),decreasing=T)) ,
+        the_label=factor(the_label,levels=c(
+                "100% matched pure well",
+                "pure well",
+                "100% matched",
+                "neither"
+                ))
+        ) %>%
+    ggplot()+theme_classic()+
+    aes(x=col,y=row,fill=the_label)+
+    geom_tile(color="black")+
+    facet_grid(plate~sample)+
+    #facet_wrap(~plate,ncol=1,labeller="label_both")+
+    scale_fill_grey("")+
+    xlab("Column")+
+    ylab("Row")+
+    theme(legend.position="top")+
+    NULL
+g
+ggsave(paste0(Sys.Date(),"_bps_recovery_of_2_plate_if_matched_if_pure_original.jpeg"),g,width=6,height=7)
+
+g <- called_all %>%
+    filter(sample=="barcode20",plate!="unknown",coverage>=50) %>%
+    mutate(col=as.numeric(col)) %>%
+    mutate(
+        matched= length==244 & errors==0 ,
+        pure = purity>0.90 & coverage>=50,
+        ) %>% 
+    mutate(
+        the_label=c(
+                "neither",
+                "100% matched",
+                "pure well",
+                "100% matched pure well"
+                )[1+matched + 2*pure]
+        ) %>%
+    mutate(the_label=ifelse(is.na(the_label),"neither",the_label)) %>%
+    mutate(
+        row=factor(row,sort(unique(row),decreasing=T)) ,
+        the_label=factor(the_label,levels=c(
+                "100% matched pure well",
+                "pure well",
+                "100% matched",
+                "neither"
+                ))
+        ) %>%
+    ggplot()+theme_classic()+
+    aes(x=col,y=row,fill=the_label)+
+    geom_tile(color="black")+
+    #facet_grid(plate~sample)+
+    facet_wrap(~plate,ncol=1,labeller="label_both")+
+    scale_fill_grey("")+
+    xlab("Column")+
+    ylab("Row")+
+    theme(legend.position="top")+
+    NULL
+g
+ggsave(paste0(Sys.Date(),"_bps_recovery_of_handmix.jpeg"),g,width=6,height=7)
+
+
+```
+
+
+
+```{r,pickin_colonies,cache=T}
+
+called %>%
+    filter(plate!="unknown") %>%
+    mutate(
+        matched= length==244 & errors==0 ,
+        pure = purity>0.90 ,
+        coverage_50 = coverage > 50
+        ) %>% 
+    group_by(pure,coverage_50,matched) %>% 
+    tally()
+
+set.seed(123)
+seq_validation <- called %>%
+    filter(plate!="unknown") %>%
+    mutate(
+        matched= length==244 & errors==0 ,
+        pure = purity>0.90 ,
+        coverage_50 = coverage > 50
+        ) %>% 
+    group_by(pure,coverage_50,matched) %>% 
+    filter(
+        ( matched  & pure  & coverage_50 ) |
+        ( !matched & pure  & coverage_50 ) 
+        ) %>%
+    sample_n(6) %>%
+    ungroup() %>% 
+    mutate(sample=factor(sample,
+            levels=sort(unique(called$sample))[c(1,3:10,2)])) %>%
+    arrange(sample,plate,row,col) %>%
+    select(sample,plate,row,col,code,target,errors,length,purity) 
+seq_validation
+
+set.seed(123)
+pure_validation <- called %>%
+    filter(plate!="unknown") %>%
+    filter(
+        purity<=0.95 ,
+        coverage > 50
+        ) %>%
+    mutate(
+        pure_bin=cut(purity,breaks=12)
+        ) %>%
+    group_by(pure_bin) %>% 
+    sample_n(1) %>%
+    ungroup() %>% 
+    mutate(sample=factor(sample,
+            levels=sort(unique(called$sample))[c(1,3:10,2)])) %>%
+    arrange(sample,plate,row,col) %>%
+    select(sample,plate,row,col,code,target,errors,length,purity) 
+pure_validation
+
+
+seq_validation %>%
+    bind_rows(pure_validation) %>%
+    write_csv("220531_24_for_sanger.csv")
+        
+
+
+
+```
+
+
+
+<!-- for example of doing cluster parallel stuff
+#clust <- makeCluster(detectCores())
+#Sys.sleep(1)
+#clusterExport(clust,c("cigar_string_parser",'parse_cigar_stats_to_stuff'))
+#Sys.sleep(1)
+#clusterEvalQ(clust,library(tidyverse))
+#Sys.sleep(1)
+#pay2allpolpay_statz <- pay2allpolpay_datar %>%
+#    mutate(cigar_stats=(parLapply(clust,cigar,function(x){cigar_string_parser(x)}))) %>%
+#    #ungroup() %>% 
+#    mutate(
+#        cigar_stuff=parLapply(clust,cigar_stats,parse_cigar_stats_to_stuff)
+#        ,
+#        payload_length=unlist(map(seq,nchar))
+#        ) %>%
+#    select(-cigar_stats) %>% 
+#    unnest(cigar_stuff)
+#pay2allpolpay_statz
+#stopCluster(clust)
+#saveRDS( pay2allpolpay_statz , "pay2allpolpay_statz.RData" ) 
+#} else {
+#pay2allpolpay_statz <- readRDS( "pay2allpolpay_statz.RData" ) 
+#}
+-->

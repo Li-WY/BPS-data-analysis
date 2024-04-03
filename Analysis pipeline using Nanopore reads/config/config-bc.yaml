@@ -1,0 +1,225 @@
+# BPS config file version 0.10-rc 
+
+pools:
+
+  bc_pool_I:
+    filter-out: 'nuconfig/filter-out-r6k-psc101-937.fasta'
+    plasmids:
+      - 438-937
+      - 439-937
+    demux: |
+      barcode81	bc_bc_3
+      barcode82	bc_bc_4
+      barcode83	bc_bc_5
+      barcode84	bc_bc_6
+      barcode85	bc_bc_7
+      barcode86	bc_bc_8
+      barcode87	bc_bc_9
+      barcode88	bc_bc_10
+
+plasmids:
+
+  438-937:
+    signature: 'ATGCATATGGGTTACCTGTACACGTACGTTCGAAGCCGGCGCCCCTAGGACTAGTACGCGTccaCACGGAGGTGAGCCCGCCTGCCCGGGGCTAGCGTCG'
+
+  439-937:
+    signature: 'ATGCATATGGGTTACCTGTACACGTACGTTCGAAGCCGGCGCCCCTAGGACTAGTACGCGTCCCGGGGCTAGCGTCGACTCTAGAGGATCGATCCTTTTT'
+
+  1064-937-lasso:
+    signature: 'GGGCCACTAGGGACAGGATTGGGCGGCCATCGAGGGCTAGAATTACCTACCGGCCTCCACCATGCCTGCG'
+
+runs:
+
+#  20221111_1544_MN21180_FAT59932_c3bac6f0:
+#    fastq: '/archive/l/seq_data/bps/20221111_1544_MN21180_FAT59932_c3bac6f0/basecalling/output/demuxed.fastq.gz'
+#    flowcell: 'FLO-MIN112'
+#    pool: '428_lasso_bc_pool_I'
+#    medaka-model: 'r104_e81_sup_g610'
+#    header-parse: 'modified'
+#
+#  20221113_1507_MN24328_FAT59932_3e555f90:
+#    fastq: '/archive/l/seq_data/bps/20221113_1507_MN24328_FAT59932_3e555f90/basecalling/output/demuxed.fastq.gz'
+#    flowcell: 'FLO-MIN112'
+#    pool: '428_lasso_bc_pool_I'
+#    medaka-model: 'r104_e81_sup_g610'
+#    header-parse: 'modified'
+
+  20230718_plasmidsaurus:
+    fastq: '/archive/l/seq_data/bps/20230718_plasmidsaurus/*gz'
+    flowcell: 'FLO-PRO114M'
+    pool: 'bc_pool_I'
+    medaka-model: 'r1041_e82_400bps_sup_v4.2.0'
+    header-parse: 'guppy'
+
+#####
+#####
+##### TODO conceptually rewrite so there's a top level ontology category of
+##### 'assembly', so all the pre-assembly and assembly steps can be pooled
+##### across 'experiments', which maybe should just be 'analyses' then
+#####
+#####
+
+samlami-rec-bc: &samlami-rec-bc
+  - arg: '--cut-on-left'
+    ref: 'ctcaagcaaggttttcagtataatgttacatgcgtacacgcgtctgtacagaaaaaaaagaaaaatttgaaatataaataacgttcttaatactaacata'
+    tail: 100
+  - arg: '--cut-on-right'
+    ref: 'ttgccctctctcttcattcagggtcatgagaggcacgccattcaaggggagaagtgagatcggtaccGGGGCCACTAGGGACAGGATtgg'
+    head: 100
+
+samlami-internal: &samlami-internal
+  - arg: '--cut-on-left'
+    ref: 'cgagGGTACCttgccctctctcttcattcagggtcatgagaggcacgccattcaaggggagaagtgagatcggtaccGGGGCCACTAGGGACAGGATtgg'
+    tail: 100
+  - arg: '--cut-on-right'
+    ref: 'cacatatacctgccgttcactattatttagtgaaatgagatattatgatattttctgaattgtgattaaaaaggcaactttatgcccatgcaacagaaac'
+    head: 100
+
+
+experiments: 
+
+  bc-recipient-msa-internal:
+    pools: 
+      - 'bc_pool_I'
+    plasmids:
+      - 438-937
+      - 439-937
+    extract-barcode:
+      438-937:
+        samlami: *samlami-rec-bc
+        itermae: 'nuconfig/itermae_BC_937.yaml'
+        knowncodes: 'nuconfig/recipient-barcodes.fasta' 
+      439-937:
+        samlami: *samlami-rec-bc
+        itermae: 'nuconfig/itermae_BC_937.yaml'
+        knowncodes: 'nuconfig/recipient-barcodes.fasta' 
+    pre-assembly:
+      samlami: *samlami-internal
+    assembly-method: msa
+    post-assembly:
+      cutoutdonor:
+        itermae: 'nuconfig/itermae_BC_donor.yaml'
+        target-fasta: 
+          - 'nuconfig/pSL438_donor_bc_corrected_v3_revcomp.fasta'
+          - 'nuconfig/pSL439_donor_bc_corrected_v3_revcomp.fasta'
+        target-size: 'short'
+
+  bc-recipient-flye-backbone:
+    pools: 
+      - 'bc_pool_I'
+    plasmids:
+    - 438-937
+    - 439-937
+    extract-barcode:
+      438-937:
+        samlami: *samlami-rec-bc
+        itermae: 'nuconfig/itermae_BC_937.yaml'
+        knowncodes: 'nuconfig/recipient-barcodes.fasta' 
+      439-937:
+        samlami: *samlami-rec-bc
+        itermae: 'nuconfig/itermae_BC_937.yaml'
+        knowncodes: 'nuconfig/recipient-barcodes.fasta' 
+    pre-assembly:
+    assembly-method: flye
+    post-assembly:
+      modulus: 
+        samlami:
+         - arg: '--modulus'
+           ref: 'AGATCAAAGGATCTTCTTGAGATCCTTTTTTTCTGCGCGTAATCTGCTGCTTGCAAACAAAAAAACCACCGCTACCAGCGGTGGTTTGTTTGCCGGATCA'
+           head: 100
+        target-fasta: 
+          - 'nuconfig/psl439_bc_x_psl937_bc-changed-to-reflect-empirical-sequencing.fasta'
+          - 'nuconfig/psl438_bc_x_psl937_bc-updated-to-reflect-empirical-sequencing.fasta'
+      donor-bc: 
+        samlami: *samlami-internal
+        itermae: 'nuconfig/itermae_BC_donor.yaml'
+        target-fasta: 
+          - 'nuconfig/pSL438_donor_bc_corrected_v3_revcomp.fasta'
+          - 'nuconfig/pSL439_donor_bc_corrected_v3_revcomp.fasta'
+        target-size: 'short'
+
+## below is using internal to separate
+  bc-internal-msa-recipient:
+    pools: 
+      - 'bc_pool_I'
+    plasmids:
+    - 438-937
+    - 439-937
+    extract-barcode:
+      438-937:
+        samlami: *samlami-internal
+        itermae: 'nuconfig/itermae_BC_donor.yaml'
+        knowncodes: 
+          - 'nuconfig/pSL438_donor_bc_corrected_v3_revcomp.fasta'
+      439-937:
+        samlami: *samlami-internal
+        itermae: 'nuconfig/itermae_BC_donor.yaml'
+        knowncodes: 
+          - 'nuconfig/pSL439_donor_bc_corrected_v3_revcomp.fasta'
+    pre-assembly:
+      samlami: *samlami-rec-bc
+    assembly-method: msa
+    post-assembly:
+      rec-bc: 
+        itermae: 'nuconfig/itermae_BC_937.yaml'
+        target-fasta: 'nuconfig/recipient-barcodes.fasta' 
+        target-size: 'short'
+
+# below is using internal to separate
+  bc-internal-flye-backbone-438:
+    pools: 
+      - 'bc_pool_I'
+    plasmids:
+    - 438-937
+    extract-barcode:
+      438-937:
+        samlami: *samlami-internal
+        itermae: 'nuconfig/itermae_BC_donor.yaml'
+        knowncodes: 
+          - 'nuconfig/pSL438_donor_bc_corrected_v3_revcomp.fasta'
+    pre-assembly:
+    assembly-method: flye
+    post-assembly:
+      rec-bc: 
+        samlami: *samlami-rec-bc
+        itermae: 'nuconfig/itermae_BC_937.yaml'
+        target-fasta: 'nuconfig/recipient-barcodes.fasta' 
+        target-size: 'short'
+      modulus: 
+        samlami:
+         - arg: '--modulus'
+           #ref: 'AGATCAAAGGATCTTCTTGAGATCCTTTTTTTCTGCGCGTAATCTGCTGCTTGCAAACAAAAAAACCACCGCTACCAGCGGTGGTTTGTTTGCCGGATCA'
+           ref: 'aagaacttttctatttctgggtaggcatcatcaggagcaggaGCGGCCGCGTTCTATAGTGTCACCTAAATCGTATGTGTATGATACATAAGGTTATGTA'
+           head: 100
+        target-fasta: 
+          - 'nuconfig/psl937_backbone.fasta'
+
+  bc-internal-flye-backbone-439:
+    pools: 
+      - 'bc_pool_I'
+    plasmids:
+    - 439-937
+    extract-barcode:
+      439-937:
+        samlami: *samlami-internal
+        itermae: 'nuconfig/itermae_BC_donor.yaml'
+        knowncodes: 
+          - 'nuconfig/pSL439_donor_bc_corrected_v3_revcomp.fasta'
+    pre-assembly:
+    assembly-method: flye
+    post-assembly:
+      rec-bc: 
+        samlami: *samlami-rec-bc
+        itermae: 'nuconfig/itermae_BC_937.yaml'
+        target-fasta: 'nuconfig/recipient-barcodes.fasta' 
+        target-size: 'short'
+      modulus: 
+        samlami:
+         - arg: '--modulus'
+           #ref: 'AGATCAAAGGATCTTCTTGAGATCCTTTTTTTCTGCGCGTAATCTGCTGCTTGCAAACAAAAAAACCACCGCTACCAGCGGTGGTTTGTTTGCCGGATCA'
+           ref: 'aagaacttttctatttctgggtaggcatcatcaggagcaggaGCGGCCGCGTTCTATAGTGTCACCTAAATCGTATGTGTATGATACATAAGGTTATGTA'
+           head: 100
+        target-fasta: 
+          - 'nuconfig/psl937_backbone.fasta'
+
+
