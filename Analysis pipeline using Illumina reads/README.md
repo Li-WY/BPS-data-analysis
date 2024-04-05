@@ -2,7 +2,7 @@
 
 About scripts and cmd
 
-  a. PartitionReads.ipynb is developed by Xianan for demultiplexing.
+  a. PartitionReads.ipynb is developed by Xianan for raw reads demultiplexing.
   
   b. cmd, using barcode-barcode amplicon sequencing as an example.
   
